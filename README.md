@@ -1,12 +1,12 @@
 # FX Risk CLI
 
-A deterministic TypeScript command-line utility for **Forex position sizing, pip-value conversion, and risk/reward analysis**.
+A deterministic TypeScript command-line utility for **Forex position sizing, pip-value conversion, risk/reward analysis, and native-currency exposure aggregation**.
 
-The project is intentionally narrow: it performs transparent calculations from user-supplied inputs and does **not** connect to brokers, fetch live rates, place trades, or claim strategy profitability.
+The project is intentionally transparent: it performs calculations from user-supplied inputs and does **not** connect to brokers, fetch live rates, place trades, or claim strategy profitability.
 
 ## Status
 
-**v0.1.0 — functional research/tooling utility**
+**v0.2.0 — functional research/tooling utility**
 
 Current scope:
 
@@ -16,16 +16,18 @@ Current scope:
 - Explicit quote-currency → account-currency conversion
 - Configurable contract size, lot step, and minimum lot
 - Long/short risk-reward validation
+- Multi-position native-currency exposure aggregation
 - Human-readable and JSON output
 - Strict TypeScript compilation
 - Automated calculation tests
 - CI across Node.js 20 and 22
+- Production-dependency audit
 
 ## Why this exists
 
 Risk calculations are simple enough to appear trivial and important enough that silent assumptions are dangerous.
 
-This utility makes those assumptions explicit. In particular, when the account currency differs from the FX pair's quote currency, the CLI requires a conversion rate rather than silently pretending the currencies are equivalent.
+This utility makes those assumptions explicit. When the account currency differs from an FX pair's quote currency, pip-value calculations require an explicit conversion rate rather than silently pretending the currencies are equivalent. Currency exposure is likewise reported in native units rather than being mislabeled as account-currency risk without the conversion data required to support that claim.
 
 ## Calculation model
 
@@ -68,6 +70,15 @@ raw lots
 ```
 
 The final lot size is **rounded down** to the configured lot step so rounding does not increase the modeled risk budget.
+
+For native-currency exposure, a position at supplied price `P` uses:
+
+```text
+base units = lots × contract size
+quote units = base units × P
+```
+
+A **long** `BASE/QUOTE` position contributes `+base units` and `-quote units`; a **short** position contributes the inverse. Exposures are aggregated by currency across positions.
 
 ## Installation
 
@@ -118,7 +129,7 @@ Raw position size: 0.50 lots
 Rounded position size: 0.50 lots
 ```
 
-### Cross-currency conversion
+### Cross-currency pip conversion
 
 For a USD account trading USDJPY, pip value is naturally denominated in JPY. Supply the JPY→USD conversion explicitly:
 
@@ -144,19 +155,26 @@ fx-risk rr \
 
 The tool infers direction from entry/stop placement and rejects a target on the wrong side of entry.
 
-### JSON output
-
-Append `--json` to any command:
+### Currency exposure
 
 ```bash
-fx-risk size \
-  --symbol EURUSD \
-  --account-currency USD \
-  --balance 10000 \
-  --risk-percent 1 \
-  --stop-pips 20 \
-  --json
+fx-risk exposure \
+  --positions-json '[{"symbol":"EURUSD","side":"long","lots":1,"price":1.10},{"symbol":"GBPUSD","side":"short","lots":0.25,"price":1.30}]'
 ```
+
+The output reports aggregated **native currency units**. It does not convert those units into account-currency market value or claim VaR/P&L without additional market data.
+
+Example position model:
+
+```text
+Long 1.00 lot EURUSD @ 1.1000
+= +100,000 EUR
+= -110,000 USD
+```
+
+### JSON output
+
+Append `--json` to any command for machine-readable output.
 
 ## Commands
 
@@ -165,6 +183,7 @@ fx-risk size \
 | `size` | Calculate a risk-based lot size |
 | `pip-value` | Calculate pip value in account currency |
 | `rr` | Calculate directional risk/reward |
+| `exposure` | Aggregate native-currency exposure across positions |
 
 ### `size` inputs
 
@@ -181,23 +200,34 @@ fx-risk size \
 | `--min-lot` | no | Minimum tradable lot; default `0.01` |
 | `--json` | no | Machine-readable output |
 
+### `exposure` input
+
+`--positions-json` accepts a non-empty JSON array. Each position contains:
+
+| Field | Required | Meaning |
+| --- | ---: | --- |
+| `symbol` | yes | FX pair |
+| `side` | yes | `long` or `short` |
+| `lots` | yes | Positive lot quantity |
+| `price` | yes | Positive position/reference price used for quote notional |
+| `contractSize` | no | Units per lot; default `100000` |
+
 ## Architecture
 
 ```text
 CLI input
    ↓
-validation / symbol normalization
+runtime validation / symbol normalization
    ↓
-pip-size + currency-conversion model
-   ↓
-risk / pip-value / R:R calculation
-   ↓
-lot-step risk-safe rounding
+┌──────────────────────────────┬──────────────────────────────┐
+│ Single-trade risk model      │ Currency exposure model      │
+│ pip / conversion / R:R / lot│ base + quote native notionals│
+└──────────────────────────────┴──────────────────────────────┘
    ↓
 human or JSON output
 ```
 
-The calculation engine lives in `src/risk.ts` and is independent of terminal presentation in `src/index.ts`.
+Single-trade calculations live in `src/risk.ts`; multi-position exposure logic lives in `src/exposure.ts`; terminal presentation stays in `src/index.ts`.
 
 ## Testing
 
@@ -219,10 +249,14 @@ Tests cover:
 - Pip-distance calculations
 - Long/short R:R calculations
 - Invalid directional setups
+- Long and short native-currency exposure
+- Multi-position exposure aggregation
+- Custom contract sizes
+- Invalid exposure inputs
 
 ## Assumptions and limitations
 
-This project deliberately does **not** model every broker or execution detail.
+This project deliberately does **not** model every broker, market, or execution detail.
 
 Current limitations:
 
@@ -233,14 +267,17 @@ Current limitations:
 - No spread/slippage model
 - No swap/financing calculation
 - No symbol-specific broker contract metadata
+- No account-currency valuation of aggregated exposure
+- No portfolio VaR/CVaR or covariance model
 - No CFD, metals, crypto, index, or futures contract model
 
-Broker specifications can differ. Contract size, minimum lot, lot step, tick size, and conversion logic should be validated against the intended trading venue before use.
+Broker specifications can differ. Contract size, minimum lot, lot step, tick size, conversion logic, and position-price conventions should be validated against the intended trading venue before use.
 
 ## Engineering principles
 
 - Deterministic calculations
 - Explicit currency-conversion assumptions
+- Native-unit exposure before valuation claims
 - Risk-safe rounding
 - Strict input validation
 - Testable domain logic separated from CLI output
@@ -251,12 +288,18 @@ Broker specifications can differ. Contract size, minimum lot, lot step, tick siz
 
 Potential next increments, only when implemented and tested:
 
-- Currency-exposure aggregation
-- Multi-position portfolio risk
+- Account-currency exposure valuation with explicit conversion inputs
+- Portfolio risk budgets and concentration controls
 - Margin/leverage modeling
 - Broker symbol-specification adapters
 - Spread/slippage-aware pre-trade estimates
 - MT5 integration behind a separate adapter boundary
+
+## Project governance
+
+- `CHANGELOG.md` — release history and model boundaries
+- `CONTRIBUTING.md` — engineering and trading-claim standards
+- `SECURITY.md` — vulnerability reporting and secret-handling guidance
 
 ## Disclaimer
 
