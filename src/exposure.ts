@@ -32,6 +32,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function normalizeExposureUnits(units: number): number {
+  if (Math.abs(units) < 1e-10) {
+    return 0;
+  }
+  return Number(units.toFixed(8));
+}
+
 export function parseExposurePositions(value: unknown): FxExposurePosition[] {
   if (!Array.isArray(value) || value.length === 0) {
     throw new Error("positions must be a non-empty JSON array");
@@ -120,7 +127,7 @@ export function calculateCurrencyExposure(
   const exposures = [...totals.entries()]
     .map(([currency, units]) => ({
       currency,
-      units: Math.abs(units) < 1e-10 ? 0 : units,
+      units: normalizeExposureUnits(units),
     }))
     .sort((a, b) => a.currency.localeCompare(b.currency));
 
