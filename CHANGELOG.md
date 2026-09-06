@@ -4,6 +4,23 @@ All notable changes to **FX Risk CLI** are documented here.
 
 The project follows semantic versioning where practical. Until a stable `1.0.0` interface is published, minor releases may include breaking CLI changes when they materially improve correctness or model clarity.
 
+## [0.3.0] - 2026-09-06
+
+### Added
+
+- Explicit account-currency valuation of aggregated FX currency exposure.
+- Direct per-currency conversion-rate inputs with validation and no live-rate assumptions.
+- Gross absolute converted notional and net converted notional outputs.
+- Drawdown-aware account risk-budget calculation.
+- Aggregate open-risk limits and remaining risk-capacity calculation.
+- `allowed`, `reduced`, and `blocked` pre-trade risk-budget states.
+- CLI `exposure-value` and `risk-budget` commands.
+- Automated tests for conversion requirements, account-currency consistency, risk-cap reductions, drawdown blocking, and invalid account state.
+
+### Model boundary
+
+Converted exposure values are **notional equivalents**, not VaR, CVaR, expected loss, P&L, margin, or liquidation risk. The risk-budget model is a deterministic control layer based on user-supplied equity, peak equity, configured drawdown limits, and modeled open-risk amounts; it does not estimate probability of loss or broker margin requirements.
+
 ## [0.2.0] - 2026-09-06
 
 ### Added

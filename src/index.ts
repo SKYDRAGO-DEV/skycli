@@ -5,6 +5,11 @@ import {
   parseExposurePositions,
 } from "./exposure.js";
 import {
+  calculateAccountRiskBudget,
+  parseExposureConversionRates,
+  valueCurrencyExposure,
+} from "./portfolio.js";
+import {
   calculatePositionSize,
   calculateRiskReward,
   parseFxSymbol,
@@ -75,12 +80,21 @@ function optionalNumber(flags: FlagMap, key: string): number | undefined {
   return parsed;
 }
 
+function parseJsonFlag(flags: FlagMap, key: string): unknown {
+  const raw = requiredString(flags, key);
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error(`--${key} must contain valid JSON`);
+  }
+}
+
 function hasJson(flags: FlagMap): boolean {
   return flags.get("json") === true;
 }
 
 function printHelp(): void {
-  console.log(`FX Risk CLI\n\nDeterministic FX position sizing, pip-value, risk/reward and native-currency exposure calculations.\n\nCommands:\n  size       Calculate risk-based position size\n  pip-value  Calculate pip value in account currency\n  rr         Calculate risk/reward for an FX setup\n  exposure   Aggregate native-currency exposure across FX positions\n\nExamples:\n  fx-risk size --symbol EURUSD --account-currency USD --balance 10000 --risk-percent 1 --stop-pips 20\n\n  fx-risk pip-value --symbol USDJPY --account-currency USD --lots 1 --quote-to-account-rate 0.00667\n\n  fx-risk rr --symbol EURUSD --entry 1.1000 --stop 1.0950 --target 1.1100\n\n  fx-risk exposure --positions-json '[{"symbol":"EURUSD","side":"long","lots":1,"price":1.10}]'\n\nUse --json on any command for machine-readable output.\n\nConversion rule:\n  When account currency differs from the pair's quote currency,\n  --quote-to-account-rate is required and means:\n  1 unit of quote currency = N units of account currency.\n\nExposure rule:\n  exposure reports native currency units only. A long BASE/QUOTE position\n  is long base units and short quote units at the supplied position price.\n`);
+  console.log(`FX Risk CLI\n\nDeterministic FX position sizing, pip-value, risk/reward, currency exposure, exposure valuation, and account-level risk-budget calculations.\n\nCommands:\n  size            Calculate risk-based position size\n  pip-value       Calculate pip value in account currency\n  rr              Calculate risk/reward for an FX setup\n  exposure        Aggregate native-currency exposure across FX positions\n  exposure-value  Convert aggregated exposure into explicit account-currency notional equivalents\n  risk-budget     Gate new trade risk using drawdown and aggregate open-risk limits\n\nExamples:\n  fx-risk size --symbol EURUSD --account-currency USD --balance 10000 --risk-percent 1 --stop-pips 20\n\n  fx-risk pip-value --symbol USDJPY --account-currency USD --lots 1 --quote-to-account-rate 0.00667\n\n  fx-risk rr --symbol EURUSD --entry 1.1000 --stop 1.0950 --target 1.1100\n\n  fx-risk exposure --positions-json '[{"symbol":"EURUSD","side":"long","lots":1,"price":1.10}]'\n\n  fx-risk exposure-value --account-currency USD --positions-json '[{"symbol":"EURUSD","side":"long","lots":1,"price":1.10}]' --conversion-rates-json '{"EUR":1.10}'\n\n  fx-risk risk-budget --equity 10000 --peak-equity 10500 --base-risk-percent 1 --max-drawdown-percent 10 --open-risk 150 --max-open-risk-percent 3\n\nUse --json on any command for machine-readable output.\n\nConversion rule:\n  When account currency differs from the pair's quote currency,\n  --quote-to-account-rate is required and means:\n  1 unit of quote currency = N units of account currency.\n\nExposure rule:\n  exposure reports native currency units only. A long BASE/QUOTE position\n  is long base units and short quote units at the supplied position price.\n\nExposure valuation rule:\n  exposure-value requires direct user-supplied conversion factors for every\n  non-account currency exposure: 1 unit of currency = N account-currency units.\n  The result is a converted notional equivalent, not VaR, expected loss, or P&L.\n\nRisk-budget rule:\n  risk-budget uses current equity, peak equity, configured drawdown limit,\n  existing modeled open risk, and maximum open-risk percentage to determine\n  whether requested per-trade risk is allowed, reduced, or blocked.\n`);
 }
 
 function runSize(flags: FlagMap): void {
@@ -175,16 +189,7 @@ function runRiskReward(flags: FlagMap): void {
 }
 
 function runExposure(flags: FlagMap): void {
-  const raw = requiredString(flags, "positions-json");
-  let parsed: unknown;
-
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error("--positions-json must contain valid JSON");
-  }
-
-  const positions = parseExposurePositions(parsed);
+  const positions = parseExposurePositions(parseJsonFlag(flags, "positions-json"));
   const result = calculateCurrencyExposure(positions);
 
   if (hasJson(flags)) {
@@ -196,6 +201,64 @@ function runExposure(flags: FlagMap): void {
   for (const exposure of result.exposures) {
     const sign = exposure.units > 0 ? "+" : "";
     console.log(`${exposure.currency}: ${sign}${exposure.units.toFixed(2)} units`);
+  }
+}
+
+function runExposureValue(flags: FlagMap): void {
+  const positions = parseExposurePositions(parseJsonFlag(flags, "positions-json"));
+  const exposure = calculateCurrencyExposure(positions);
+  const rates = parseExposureConversionRates(parseJsonFlag(flags, "conversion-rates-json"));
+  const result = valueCurrencyExposure(
+    exposure,
+    requiredString(flags, "account-currency"),
+    rates,
+  );
+
+  if (hasJson(flags)) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  console.log(`Positions: ${result.positionCount}`);
+  console.log(`Account currency: ${result.accountCurrency}`);
+  for (const item of result.exposures) {
+    const sign = item.accountValue > 0 ? "+" : "";
+    console.log(
+      `${item.currency}: ${item.units.toFixed(2)} units × ${item.accountRate} = ${sign}${item.accountValue.toFixed(2)} ${result.accountCurrency}`,
+    );
+  }
+  console.log(
+    `Gross absolute converted notional: ${result.grossAbsoluteAccountValue.toFixed(2)} ${result.accountCurrency}`,
+  );
+  console.log(`Net converted notional: ${result.netAccountValue.toFixed(2)} ${result.accountCurrency}`);
+}
+
+function runRiskBudget(flags: FlagMap): void {
+  const result = calculateAccountRiskBudget({
+    equity: requiredNumber(flags, "equity"),
+    peakEquity: requiredNumber(flags, "peak-equity"),
+    baseRiskPercent: requiredNumber(flags, "base-risk-percent"),
+    maxDrawdownPercent: requiredNumber(flags, "max-drawdown-percent"),
+    openRiskAmount: optionalNumber(flags, "open-risk") ?? 0,
+    maxOpenRiskPercent: requiredNumber(flags, "max-open-risk-percent"),
+  });
+
+  if (hasJson(flags)) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  console.log(`Status: ${result.status.toUpperCase()}`);
+  console.log(`Equity: ${result.equity.toFixed(2)}`);
+  console.log(`Peak equity: ${result.peakEquity.toFixed(2)}`);
+  console.log(`Current drawdown: ${result.drawdownPercent.toFixed(3)}%`);
+  console.log(`Drawdown headroom: ${result.drawdownHeadroomAmount.toFixed(2)}`);
+  console.log(`Requested new risk: ${result.requestedRiskAmount.toFixed(2)}`);
+  console.log(`Existing modeled open risk: ${result.openRiskAmount.toFixed(2)}`);
+  console.log(`Remaining open-risk capacity: ${result.remainingOpenRiskAmount.toFixed(2)}`);
+  console.log(`Allowed new risk: ${result.allowedRiskAmount.toFixed(2)}`);
+  if (result.constraints.length > 0) {
+    console.log(`Constraints: ${result.constraints.join("; ")}`);
   }
 }
 
@@ -221,6 +284,12 @@ function main(): void {
       break;
     case "exposure":
       runExposure(flags);
+      break;
+    case "exposure-value":
+      runExposureValue(flags);
+      break;
+    case "risk-budget":
+      runRiskBudget(flags);
       break;
     default:
       throw new Error(`Unknown command: ${command}`);
