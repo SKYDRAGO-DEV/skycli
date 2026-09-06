@@ -4,6 +4,21 @@ All notable changes to **FX Risk CLI** are documented here.
 
 The project follows semantic versioning where practical. Until a stable `1.0.0` interface is published, minor releases may include breaking CLI changes when they materially improve correctness or model clarity.
 
+## [0.2.0] - 2026-09-06
+
+### Added
+
+- Native-currency exposure aggregation across multiple FX positions.
+- Explicit long/short base-versus-quote notional accounting.
+- Runtime validation for JSON position inputs.
+- Custom per-position contract-size support.
+- CLI `exposure` command with human-readable and JSON output.
+- Automated tests for long, short, aggregated, custom-contract and invalid-input exposure cases.
+
+### Model boundary
+
+Exposure is reported in **native currency units**. This release does not convert the aggregated exposures into account-currency market value, VaR, expected loss, or live portfolio risk because doing so requires additional market/conversion data and explicit modeling assumptions.
+
 ## [0.1.0] - 2026-09-06
 
 ### Added
