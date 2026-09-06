@@ -1,99 +1,204 @@
 #!/usr/bin/env node
-import { Command } from 'commander';
-import chalk from 'chalk';
-import ora from 'ora';
-import inquirer from 'inquirer';
-import got from 'got';
 
-interface ProjectConfig {
-  name: string;
-  template: string;
-  typescript: boolean;
-}
+import {
+  calculatePositionSize,
+  calculateRiskReward,
+  parseFxSymbol,
+  pipValuePerStandardLot,
+  resolveQuoteToAccountRate,
+} from "./risk.js";
 
-export class SkyCLI {
-  private spinner: ReturnType<typeof ora> | null = null;
+type FlagValue = string | true;
+type FlagMap = Map<string, FlagValue>;
 
-  async init(config: ProjectConfig): Promise<void> {
-    this.spinner = ora('Initializing project...').start();
-    await this.sleep(800);
-    
-    const template = await this.fetchTemplate(config.template);
-    
-    this.spinner.succeed(chalk.green('✓ Project initialized!'));
-    console.log(chalk.blue(`  Template: ${template.name}`));
-    console.log(chalk.blue(`  Location: ./${config.name}`));
-  }
+function parseFlags(args: string[]): FlagMap {
+  const flags = new Map<string, FlagValue>();
 
-  async deploy(env: string): Promise<void> {
-    const spinner = ora(`Deploying to ${env}...`).start();
-    
-    try {
-      await this.sleep;
-      spinner.succeed(chalk.green('✓ Deployed successfully!'));
-      console.log(chalk.gray(`  Environment: ${env}`));
-      console.log(chalk.gray(`  URL: https://app.example.com`));
-    } catch (error) {
-      spinner.fail('Deployment failed');
-      throw error;
+  for (let i = 0; i < args.length; i += 1) {
+    const token = args[i];
+    if (!token?.startsWith("--")) {
+      throw new Error(`Unexpected argument: ${token ?? ""}`);
     }
+
+    const key = token.slice(2);
+    if (key === "json") {
+      flags.set(key, true);
+      continue;
+    }
+
+    const value = args[i + 1];
+    if (value === undefined || value.startsWith("--")) {
+      throw new Error(`Missing value for --${key}`);
+    }
+
+    flags.set(key, value);
+    i += 1;
   }
 
-  async search(query: string): Promise<string[]> {
-    const spinner = ora('Searching...').start();
-    await this.sleep(500);
-    spinner.succeed();
-    
-    const results = [
-      { title: 'Async/Await Patterns', score: 0.98 },
-      { title: 'TypeScript Generics', score: 0.95 },
-      { title: 'React Hooks Guide', score: 0.92 },
-    ];
-    
-    return results.map(r => r.title);
+  return flags;
+}
+
+function requiredString(flags: FlagMap, key: string): string {
+  const value = flags.get(key);
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`--${key} is required`);
+  }
+  return value;
+}
+
+function requiredNumber(flags: FlagMap, key: string): number {
+  const raw = requiredString(flags, key);
+  const value = Number(raw);
+  if (!Number.isFinite(value)) {
+    throw new Error(`--${key} must be a finite number`);
+  }
+  return value;
+}
+
+function optionalNumber(flags: FlagMap, key: string): number | undefined {
+  const value = flags.get(key);
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    throw new Error(`--${key} requires a numeric value`);
   }
 
-  private async fetchTemplate(name: string): Promise<{ name: string }> {
-    return { name };
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`--${key} must be a finite number`);
+  }
+  return parsed;
+}
+
+function hasJson(flags: FlagMap): boolean {
+  return flags.get("json") === true;
+}
+
+function printHelp(): void {
+  console.log(`FX Risk CLI\n\nDeterministic FX position sizing, pip-value and risk/reward calculations.\n\nCommands:\n  size       Calculate risk-based position size\n  pip-value  Calculate pip value in account currency\n  rr         Calculate risk/reward for an FX setup\n\nExamples:\n  fx-risk size --symbol EURUSD --account-currency USD --balance 10000 --risk-percent 1 --stop-pips 20\n\n  fx-risk pip-value --symbol USDJPY --account-currency USD --lots 1 --quote-to-account-rate 0.00667\n\n  fx-risk rr --symbol EURUSD --entry 1.1000 --stop 1.0950 --target 1.1100\n\nUse --json on any command for machine-readable output.\n\nConversion rule:\n  When account currency differs from the pair's quote currency,\n  --quote-to-account-rate is required and means:\n  1 unit of quote currency = N units of account currency.\n`);
+}
+
+function runSize(flags: FlagMap): void {
+  const quoteToAccountRate = optionalNumber(flags, "quote-to-account-rate");
+  const contractSize = optionalNumber(flags, "contract-size");
+  const lotStep = optionalNumber(flags, "lot-step");
+  const minLot = optionalNumber(flags, "min-lot");
+
+  const result = calculatePositionSize({
+    symbol: requiredString(flags, "symbol"),
+    accountCurrency: requiredString(flags, "account-currency"),
+    balance: requiredNumber(flags, "balance"),
+    riskPercent: requiredNumber(flags, "risk-percent"),
+    stopPips: requiredNumber(flags, "stop-pips"),
+    ...(quoteToAccountRate !== undefined ? { quoteToAccountRate } : {}),
+    ...(contractSize !== undefined ? { contractSize } : {}),
+    ...(lotStep !== undefined ? { lotStep } : {}),
+    ...(minLot !== undefined ? { minLot } : {}),
+  });
+
+  if (hasJson(flags)) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
   }
 
-  private sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+  console.log(`Symbol: ${result.symbol}`);
+  console.log(`Account currency: ${result.accountCurrency}`);
+  console.log(`Risk amount: ${result.riskAmount.toFixed(2)} ${result.accountCurrency}`);
+  console.log(`Stop distance: ${result.stopPips.toFixed(2)} pips`);
+  console.log(`Pip value / standard lot: ${result.pipValuePerStandardLot.toFixed(4)} ${result.accountCurrency}`);
+  console.log(`Raw size: ${result.rawLots.toFixed(6)} lots`);
+  console.log(`Rounded size: ${result.lots.toFixed(4)} lots`);
+  console.log(`Risk at rounded size: ${result.riskAtRoundedLots.toFixed(2)} ${result.accountCurrency}`);
+}
+
+function runPipValue(flags: FlagMap): void {
+  const symbol = requiredString(flags, "symbol");
+  const accountCurrency = requiredString(flags, "account-currency");
+  const lots = optionalNumber(flags, "lots") ?? 1;
+  const quoteToAccountRate = optionalNumber(flags, "quote-to-account-rate");
+  const contractSize = optionalNumber(flags, "contract-size");
+
+  if (!Number.isFinite(lots) || lots <= 0) {
+    throw new Error("--lots must be a positive finite number");
+  }
+
+  const perLot = pipValuePerStandardLot({
+    symbol,
+    accountCurrency,
+    ...(quoteToAccountRate !== undefined ? { quoteToAccountRate } : {}),
+    ...(contractSize !== undefined ? { contractSize } : {}),
+  });
+  const conversionRate = resolveQuoteToAccountRate(symbol, accountCurrency, quoteToAccountRate);
+  const normalized = parseFxSymbol(symbol);
+  const result = {
+    symbol: `${normalized.base}${normalized.quote}`,
+    accountCurrency: accountCurrency.toUpperCase(),
+    lots,
+    quoteToAccountRate: conversionRate,
+    pipValuePerStandardLot: perLot,
+    pipValue: perLot * lots,
+  };
+
+  if (hasJson(flags)) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  console.log(`Symbol: ${result.symbol}`);
+  console.log(`Lots: ${result.lots}`);
+  console.log(`Pip value: ${result.pipValue.toFixed(4)} ${result.accountCurrency}`);
+}
+
+function runRiskReward(flags: FlagMap): void {
+  const result = calculateRiskReward(
+    requiredString(flags, "symbol"),
+    requiredNumber(flags, "entry"),
+    requiredNumber(flags, "stop"),
+    requiredNumber(flags, "target"),
+  );
+
+  if (hasJson(flags)) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  console.log(`Symbol: ${result.symbol}`);
+  console.log(`Direction: ${result.direction}`);
+  console.log(`Risk: ${result.riskPips.toFixed(2)} pips`);
+  console.log(`Reward: ${result.rewardPips.toFixed(2)} pips`);
+  console.log(`Reward/Risk: ${result.rewardRisk.toFixed(3)}`);
+}
+
+function main(): void {
+  const [command, ...rest] = process.argv.slice(2);
+
+  if (command === undefined || command === "help" || command === "--help" || command === "-h") {
+    printHelp();
+    return;
+  }
+
+  const flags = parseFlags(rest);
+
+  switch (command) {
+    case "size":
+      runSize(flags);
+      break;
+    case "pip-value":
+      runPipValue(flags);
+      break;
+    case "rr":
+      runRiskReward(flags);
+      break;
+    default:
+      throw new Error(`Unknown command: ${command}`);
   }
 }
 
-const cli = new Command('sky');
-cli
-  .version('1.0.0')
-  .description('Blazing fast CLI tool for developer productivity');
-
-cli.command('init')
-  .argument('<name>', 'Project name')
-  .option('-t, --template <template>', 'Project template', 'default')
-  .action(async (name, options) => {
-    const config: ProjectConfig = {
-      name,
-      template: options.template,
-      typescript: true,
-    };
-    await cli.init(config);
-  });
-
-cli.command('deploy')
-  .option('-e, --env <env>', 'Environment', 'production')
-  .action(async (options) => {
-    await cli.deploy(options.env);
-  });
-
-cli.command('search')
-  .argument('<query>', 'Search query')
-  .action(async (query) => {
-    const results = await cli.search(query);
-    results.forEach(r => console.log(chalk.yellow('→ ' + r)));
-  });
-
-if (process.argv.length > 2) {
-  cli.parse(process.argv);
-} else {
-  cli.help();
+try {
+  main();
+} catch (error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`fx-risk: ${message}`);
+  process.exitCode = 1;
 }
