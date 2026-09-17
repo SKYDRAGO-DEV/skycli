@@ -20,6 +20,40 @@ import {
 type FlagValue = string | true;
 type FlagMap = Map<string, FlagValue>;
 
+const GLOBAL_FLAGS = new Set(["json"]);
+
+const COMMAND_FLAGS: Record<string, readonly string[]> = {
+  size: [
+    "symbol",
+    "account-currency",
+    "balance",
+    "risk-percent",
+    "stop-pips",
+    "quote-to-account-rate",
+    "contract-size",
+    "lot-step",
+    "min-lot",
+  ],
+  "pip-value": [
+    "symbol",
+    "account-currency",
+    "lots",
+    "quote-to-account-rate",
+    "contract-size",
+  ],
+  rr: ["symbol", "entry", "stop", "target"],
+  exposure: ["positions-json"],
+  "exposure-value": ["account-currency", "positions-json", "conversion-rates-json"],
+  "risk-budget": [
+    "equity",
+    "peak-equity",
+    "base-risk-percent",
+    "max-drawdown-percent",
+    "open-risk",
+    "max-open-risk-percent",
+  ],
+};
+
 function parseFlags(args: string[]): FlagMap {
   const flags = new Map<string, FlagValue>();
 
@@ -30,6 +64,13 @@ function parseFlags(args: string[]): FlagMap {
     }
 
     const key = token.slice(2);
+    if (key === "") {
+      throw new Error("Invalid empty option: --");
+    }
+    if (flags.has(key)) {
+      throw new Error(`Duplicate option: --${key}`);
+    }
+
     if (key === "json") {
       flags.set(key, true);
       continue;
@@ -45,6 +86,20 @@ function parseFlags(args: string[]): FlagMap {
   }
 
   return flags;
+}
+
+function assertAllowedFlags(command: string, flags: FlagMap): void {
+  const commandFlags = COMMAND_FLAGS[command];
+  if (commandFlags === undefined) {
+    throw new Error(`Unknown command: ${command}`);
+  }
+
+  const allowed = new Set([...commandFlags, ...GLOBAL_FLAGS]);
+  for (const key of flags.keys()) {
+    if (!allowed.has(key)) {
+      throw new Error(`Unknown option for ${command}: --${key}`);
+    }
+  }
 }
 
 function requiredString(flags: FlagMap, key: string): string {
@@ -94,7 +149,7 @@ function hasJson(flags: FlagMap): boolean {
 }
 
 function printHelp(): void {
-  console.log(`FX Risk CLI\n\nDeterministic FX position sizing, pip-value, risk/reward, currency exposure, exposure valuation, and account-level risk-budget calculations.\n\nCommands:\n  size            Calculate risk-based position size\n  pip-value       Calculate pip value in account currency\n  rr              Calculate risk/reward for an FX setup\n  exposure        Aggregate native-currency exposure across FX positions\n  exposure-value  Convert aggregated exposure into explicit account-currency notional equivalents\n  risk-budget     Gate new trade risk using drawdown and aggregate open-risk limits\n\nExamples:\n  fx-risk size --symbol EURUSD --account-currency USD --balance 10000 --risk-percent 1 --stop-pips 20\n\n  fx-risk pip-value --symbol USDJPY --account-currency USD --lots 1 --quote-to-account-rate 0.00667\n\n  fx-risk rr --symbol EURUSD --entry 1.1000 --stop 1.0950 --target 1.1100\n\n  fx-risk exposure --positions-json '[{"symbol":"EURUSD","side":"long","lots":1,"price":1.10}]'\n\n  fx-risk exposure-value --account-currency USD --positions-json '[{"symbol":"EURUSD","side":"long","lots":1,"price":1.10}]' --conversion-rates-json '{"EUR":1.10}'\n\n  fx-risk risk-budget --equity 10000 --peak-equity 10500 --base-risk-percent 1 --max-drawdown-percent 10 --open-risk 150 --max-open-risk-percent 3\n\nUse --json on any command for machine-readable output.\n\nConversion rule:\n  When account currency differs from the pair's quote currency,\n  --quote-to-account-rate is required and means:\n  1 unit of quote currency = N units of account currency.\n\nExposure rule:\n  exposure reports native currency units only. A long BASE/QUOTE position\n  is long base units and short quote units at the supplied position price.\n\nExposure valuation rule:\n  exposure-value requires direct user-supplied conversion factors for every\n  non-account currency exposure: 1 unit of currency = N account-currency units.\n  The result is a converted notional equivalent, not VaR, expected loss, or P&L.\n\nRisk-budget rule:\n  risk-budget uses current equity, peak equity, configured drawdown limit,\n  existing modeled open risk, and maximum open-risk percentage to determine\n  whether requested per-trade risk is allowed, reduced, or blocked.\n`);
+  console.log(`FX Risk CLI\n\nDeterministic FX position sizing, pip-value, risk/reward, currency exposure, exposure valuation, and account-level risk-budget calculations.\n\nCommands:\n  size            Calculate risk-based position size\n  pip-value       Calculate pip value in account currency\n  rr              Calculate risk/reward for an FX setup\n  exposure        Aggregate native-currency exposure across FX positions\n  exposure-value  Convert aggregated exposure into explicit account-currency notional equivalents\n  risk-budget     Gate new trade risk using drawdown and aggregate open-risk limits\n\nExamples:\n  fx-risk size --symbol EURUSD --account-currency USD --balance 10000 --risk-percent 1 --stop-pips 20\n\n  fx-risk pip-value --symbol USDJPY --account-currency USD --lots 1 --quote-to-account-rate 0.00667\n\n  fx-risk rr --symbol EURUSD --entry 1.1000 --stop 1.0950 --target 1.1100\n\n  fx-risk exposure --positions-json '[{"symbol":"EURUSD","side":"long","lots":1,"price":1.10}]'\n\n  fx-risk exposure-value --account-currency USD --positions-json '[{"symbol":"EURUSD","side":"long","lots":1,"price":1.10}]' --conversion-rates-json '{"EUR":1.10}'\n\n  fx-risk risk-budget --equity 10000 --peak-equity 10500 --base-risk-percent 1 --max-drawdown-percent 10 --open-risk 150 --max-open-risk-percent 3\n\nUse --json on any command for machine-readable output. Unknown and duplicate options are rejected rather than silently ignored.\n\nConversion rule:\n  When account currency differs from the pair's quote currency,\n  --quote-to-account-rate is required and means:\n  1 unit of quote currency = N units of account currency.\n\nExposure rule:\n  exposure reports native currency units only. A long BASE/QUOTE position\n  is long base units and short quote units at the supplied position price.\n\nExposure valuation rule:\n  exposure-value requires direct user-supplied conversion factors for every\n  non-account currency exposure: 1 unit of currency = N account-currency units.\n  The result is a converted notional equivalent, not VaR, expected loss, or P&L.\n\nRisk-budget rule:\n  risk-budget uses current equity, peak equity, configured drawdown limit,\n  existing modeled open risk, and maximum open-risk percentage to determine\n  whether requested per-trade risk is allowed, reduced, or blocked.\n`);
 }
 
 function runSize(flags: FlagMap): void {
@@ -151,7 +206,7 @@ function runPipValue(flags: FlagMap): void {
   const normalized = parseFxSymbol(symbol);
   const result = {
     symbol: `${normalized.base}${normalized.quote}`,
-    accountCurrency: accountCurrency.toUpperCase(),
+    accountCurrency: accountCurrency.trim().toUpperCase(),
     lots,
     quoteToAccountRate: conversionRate,
     pipValuePerStandardLot: perLot,
@@ -271,6 +326,7 @@ function main(): void {
   }
 
   const flags = parseFlags(rest);
+  assertAllowedFlags(command, flags);
 
   switch (command) {
     case "size":
