@@ -88,6 +88,22 @@ test("rounds lot size down to avoid exceeding configured risk", () => {
   assert.ok(result.riskAtRoundedLots <= result.riskAmount);
 });
 
+test("preserves exact decimal lot-step boundaries despite floating-point representation", () => {
+  const result = calculatePositionSize({
+    symbol: "EURUSD",
+    accountCurrency: "USD",
+    balance: 43_000,
+    riskPercent: 1,
+    stopPips: 10,
+    lotStep: 0.1,
+    minLot: 0.1,
+  });
+
+  assert.ok(Math.abs(result.rawLots - 4.3) < 1e-12);
+  assert.equal(result.lots, 4.3);
+  assert.ok(result.riskAtRoundedLots <= result.riskAmount + 1e-10);
+});
+
 test("returns zero lots when risk budget is below minimum tradable lot", () => {
   const result = calculatePositionSize({
     symbol: "EURUSD",
