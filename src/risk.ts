@@ -116,8 +116,17 @@ export function pipValuePerStandardLot(input: PipValueInput): number {
 
 function floorToStep(value: number, step: number): number {
   assertPositiveFinite(step, "lotStep");
-  const increments = Math.floor((value + Number.EPSILON) / step);
-  return Number((increments * step).toFixed(8));
+
+  const quotient = value / step;
+  const nearestInteger = Math.round(quotient);
+  const boundaryTolerance =
+    Number.EPSILON * Math.max(1, Math.abs(quotient)) * 8;
+  const increments =
+    Math.abs(quotient - nearestInteger) <= boundaryTolerance
+      ? nearestInteger
+      : Math.floor(quotient);
+
+  return Number((increments * step).toPrecision(15));
 }
 
 export function calculatePositionSize(input: PositionSizeInput): PositionSizeResult {
