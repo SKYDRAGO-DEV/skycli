@@ -92,7 +92,11 @@ export function parseExposurePositions(value: unknown): FxExposurePosition[] {
 }
 
 function addExposure(exposures: Map<string, number>, currency: string, units: number): void {
-  exposures.set(currency, (exposures.get(currency) ?? 0) + units);
+  const total = (exposures.get(currency) ?? 0) + units;
+  if (!Number.isFinite(total)) {
+    throw new Error(`aggregate ${currency} exposure is not finite`);
+  }
+  exposures.set(currency, total);
 }
 
 export function calculateCurrencyExposure(
@@ -118,6 +122,9 @@ export function calculateCurrencyExposure(
 
     const baseUnits = position.lots * contractSize;
     const quoteUnits = baseUnits * position.price;
+    if (!Number.isFinite(baseUnits) || !Number.isFinite(quoteUnits)) {
+      throw new Error(`positions[${index}] exposure exceeds finite numeric range`);
+    }
     const sign = position.side === "long" ? 1 : -1;
 
     addExposure(totals, base, sign * baseUnits);
