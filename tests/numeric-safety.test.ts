@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { calculateCurrencyExposure } from "../src/exposure.js";
-import { calculateAccountRiskBudget, valueCurrencyExposure } from "../src/portfolio.js";
+import { valueCurrencyExposure } from "../src/portfolio.js";
 import { calculatePositionSize, pipValuePerStandardLot } from "../src/risk.js";
 
 test("rejects overflow in converted pip value instead of returning Infinity", () => {
