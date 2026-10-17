@@ -125,9 +125,16 @@ export function valueCurrencyExposure(
     }
     assertPositiveFinite(accountRate, `conversion rate for ${currency}`);
 
-    const accountValue = normalizeNumericBoundary(item.units * accountRate);
+    const converted = item.units * accountRate;
+    if (!Number.isFinite(converted)) {
+      throw new Error(`converted exposure for ${currency} is not finite`);
+    }
+    const accountValue = normalizeNumericBoundary(converted);
     grossAbsoluteAccountValue += Math.abs(accountValue);
     netAccountValue += accountValue;
+    if (!Number.isFinite(grossAbsoluteAccountValue) || !Number.isFinite(netAccountValue)) {
+      throw new Error("aggregate account-currency exposure is not finite");
+    }
 
     return {
       currency,

@@ -111,13 +111,18 @@ export function pipValuePerStandardLot(input: PipValueInput): number {
     input.quoteToAccountRate,
   );
 
-  return pipSize(input.symbol) * contractSize * conversionRate;
+  const value = pipSize(input.symbol) * contractSize * conversionRate;
+  assertPositiveFinite(value, "pipValuePerStandardLot");
+  return value;
 }
 
 function floorToStep(value: number, step: number): number {
   assertPositiveFinite(step, "lotStep");
 
   const quotient = value / step;
+  if (!Number.isFinite(quotient) || quotient > Number.MAX_SAFE_INTEGER) {
+    throw new Error("lot-step quotient exceeds safe numeric precision");
+  }
   const nearestInteger = Math.round(quotient);
   const boundaryTolerance =
     Number.EPSILON * Math.max(1, Math.abs(quotient)) * 8;
@@ -126,7 +131,11 @@ function floorToStep(value: number, step: number): number {
       ? nearestInteger
       : Math.floor(quotient);
 
-  return Number((increments * step).toPrecision(15));
+  const stepped = increments * step;
+  if (!Number.isFinite(stepped)) {
+    throw new Error("rounded lot size is not finite");
+  }
+  return Number(stepped.toPrecision(15));
 }
 
 export function calculatePositionSize(input: PositionSizeInput): PositionSizeResult {
@@ -161,10 +170,19 @@ export function calculatePositionSize(input: PositionSizeInput): PositionSizeRes
   });
 
   const riskAmount = input.balance * (input.riskPercent / 100);
-  const rawLots = riskAmount / (input.stopPips * pipValue);
+  assertPositiveFinite(riskAmount, "risk amount");
+  const riskPerStandardLot = input.stopPips * pipValue;
+  assertPositiveFinite(riskPerStandardLot, "risk per standard lot");
+  const rawLots = riskAmount / riskPerStandardLot;
+  if (!Number.isFinite(rawLots) || rawLots < 0) {
+    throw new Error("raw lot size is not a finite non-negative number");
+  }
   const steppedLots = floorToStep(rawLots, lotStep);
   const lots = steppedLots >= minLot ? steppedLots : 0;
-  const riskAtRoundedLots = lots * input.stopPips * pipValue;
+  const riskAtRoundedLots = lots * riskPerStandardLot;
+  if (!Number.isFinite(riskAtRoundedLots)) {
+    throw new Error("rounded position risk is not finite");
+  }
 
   return {
     symbol: normalizedSymbol,
